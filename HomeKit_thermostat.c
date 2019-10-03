@@ -21,10 +21,10 @@
  */
 
 #define DEVICE_MANUFACTURER "Kristian Dimitrov"
-#define DEVICE_NAME "HomeKit_thermostat"
-#define DEVICE_MODEL "Basic"
+#define DEVICE_NAME "HomeKit-thermostat"
+#define DEVICE_MODEL "SSD1306 & DHT22"
 #define DEVICE_SERIAL "12345678"
-#define FW_VERSION "0.1.9"
+#define FW_VERSION "0.4.2"
 
 #include <stdio.h>
 #include <espressif/esp_wifi.h>
@@ -41,36 +41,61 @@
 #include <homekit/characteristics.h>
 #include <wifi_config.h>
 #include <dht/dht.h>
-#include <sysparam.h>
+//#include <sysparam.h>
 #include "HomeKit_thermostat.h"
 #include "button.h"
-#include "bmp280/bmp280.h"
-#include <rboot-api.h>
+//#include "bmp280/bmp280.h"
+//#include <rboot-api.h>
 #include <i2c/i2c.h>
 #include <string.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include "fonts/fonts.h"
 #include "ota-api.h"
 
 
-#define TEMPERATURE_SENSOR_PIN 4
+
+#define TEMPERATURE_SENSOR_PIN 4 //D2
 #define TEMPERATURE_POLL_PERIOD 10000
-#define BUTTON_UP_GPIO 12
-#define BUTTON_DOWN_GPIO 13
-#define BUTTON_RESET 0
-#define RELAY_GPIO 2
-#define RECIVE_GPIO 4
-const int LED_GPIO = 16;
+#define BUTTON_UP_GPIO 12  //D6
+#define BUTTON_DOWN_GPIO 13 //D7
+#define BUTTON_RESET 0 //D3
+#define RELAY_GPIO 2 //D4
+#define RECIVE_GPIO 15 //D8
+const int LED_GPIO = 16; //D0
 
+//Timer
+TimerHandle_t xSave_characteristic_Timer = NULL;
+TimerHandle_t xTemperatureTimer = NULL;
 
+void process_setting_update();
+void on_update(homekit_characteristic_t *ch, homekit_value_t value, void *context)
+{
+    process_setting_update();
+    xTimerReset(xSave_characteristic_Timer,0);
+}
 
-float temp_pause = 0;
+homekit_characteristic_t current_temperature = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE, 0);
+homekit_characteristic_t target_temperature = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE, 20, .callback = HOMEKIT_CHARACTERISTIC_CALLBACK(on_update));
+homekit_characteristic_t units = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY_UNITS, 0);
+homekit_characteristic_t current_state = HOMEKIT_CHARACTERISTIC_(CURRENT_HEATING_COOLING_STATE, 0);
+homekit_characteristic_t target_state = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE, 1, .callback = HOMEKIT_CHARACTERISTIC_CALLBACK(on_update));
+homekit_characteristic_t cooling_threshold = HOMEKIT_CHARACTERISTIC_(COOLING_THRESHOLD_TEMPERATURE, 25, .callback = HOMEKIT_CHARACTERISTIC_CALLBACK(on_update));
+homekit_characteristic_t heating_threshold = HOMEKIT_CHARACTERISTIC_(HEATING_THRESHOLD_TEMPERATURE, 15, .callback = HOMEKIT_CHARACTERISTIC_CALLBACK(on_update));
+homekit_characteristic_t current_humidity = HOMEKIT_CHARACTERISTIC_(CURRENT_RELATIVE_HUMIDITY, 0);
+
+homekit_characteristic_t ota_trigger  = API_OTA_TRIGGER;
+homekit_characteristic_t name         = HOMEKIT_CHARACTERISTIC_(NAME, DEVICE_NAME);
+homekit_characteristic_t manufacturer = HOMEKIT_CHARACTERISTIC_(MANUFACTURER,  DEVICE_MANUFACTURER);
+homekit_characteristic_t serial       = HOMEKIT_CHARACTERISTIC_(SERIAL_NUMBER, DEVICE_SERIAL);
+homekit_characteristic_t model        = HOMEKIT_CHARACTERISTIC_(MODEL,         DEVICE_MODEL);
+homekit_characteristic_t revision     = HOMEKIT_CHARACTERISTIC_(FIRMWARE_REVISION,  FW_VERSION);
+
+float temp_pause = 0, T = 0;
 bool sensor_temp = false;
 bool is_display_init = false;
 
 //static ETSTimer thermostat_timer;
-static TaskHandle_t xHandle, Handle_screen;
+static TaskHandle_t  Handle_screen;
 bool fire = false;
 int count_error = 0;
 
@@ -84,9 +109,10 @@ int count_error = 0;
 #define SCL_PIN 14 //D5
 #define SDA_PIN 5  //D1
 
-const uint8_t i2c_bus = 0;
-const uint8_t scl_pin = 14;
-const uint8_t sda_pin = 5;
+//const uint8_t i2c_bus = 0;
+//const uint8_t scl_pin = 14;
+//const uint8_t sda_pin = 5;
+
    
 #define DEFAULT_FONT FONT_FACE_TERMINUS_16X32_ISO8859_1
 
@@ -94,6 +120,7 @@ const uint8_t sda_pin = 5;
 static const ssd1306_t dev = {
     .protocol = SSD1306_PROTO_I2C,
     .screen = SSD1306_SCREEN,
+   // .screen = SH1106_SCREEN,
     .i2c_dev.bus = I2C_BUS,
     .i2c_dev.addr = SSD1306_I2C_ADDR_0,
     .width = DISPLAY_WIDTH,
@@ -126,8 +153,9 @@ void relay_write(bool on)
 
 
 
+
 // temp display value
- char target_temp_string[20];
+    char target_temp_string[20];
     char mode_string[20];
     char temperature_string[20];
     char humidity_string[20];
@@ -138,7 +166,7 @@ void relay_write(bool on)
 
 
 
-void process_setting_update();
+
 
 
 
@@ -146,7 +174,7 @@ void process_setting_update();
 void thermostat_identify_task(void *_args)
 {
 printf("Thermostat identify\n");
-   vTaskSuspend(xHandle);
+ //  vTaskSuspend(xHandle);
    vTaskSuspend(Handle_screen);
 	 ssd1306_clear_screen(&dev);
 
@@ -165,7 +193,7 @@ printf("Thermostat identify\n");
         
    // led_write(false);
 	vTaskDelay(500 / portTICK_PERIOD_MS);
-	vTaskResume(xHandle);
+//	vTaskResume(xHandle);
 	vTaskResume(Handle_screen);
     vTaskDelete(NULL);
 }
@@ -174,105 +202,41 @@ void thermostat_identify(homekit_value_t _value)
 {
     xTaskCreate(thermostat_identify_task, "Thermostat identify", 256, NULL, 2, NULL);
 }
-void ota_firmware_callback();
-
-/*
- #include "ota-api.h"
-homekit_characteristic_t name         = HOMEKIT_CHARACTERISTIC_(NAME, DEVICE_NAME);
-homekit_characteristic_t manufacturer = HOMEKIT_CHARACTERISTIC_(MANUFACTURER,  DEVICE_MANUFACTURER);
-homekit_characteristic_t serial       = HOMEKIT_CHARACTERISTIC_(SERIAL_NUMBER, DEVICE_SERIAL);
-homekit_characteristic_t model        = HOMEKIT_CHARACTERISTIC_(MODEL,         DEVICE_MODEL);
-homekit_characteristic_t revision     = HOMEKIT_CHARACTERISTIC_(FIRMWARE_REVISION,  FW_VERSION);
-*/
+//void ota_firmware_callback();
 
 
-homekit_characteristic_t manufacturer = HOMEKIT_CHARACTERISTIC_(MANUFACTURER,  "X");
-homekit_characteristic_t serial       = HOMEKIT_CHARACTERISTIC_(SERIAL_NUMBER, "1");
-homekit_characteristic_t model        = HOMEKIT_CHARACTERISTIC_(MODEL,         "Z");
-homekit_characteristic_t revision     = HOMEKIT_CHARACTERISTIC_(FIRMWARE_REVISION,  "0.0.0");
-homekit_characteristic_t name         = HOMEKIT_CHARACTERISTIC_(NAME, DEVICE_NAME);
 
 
-void on_update(homekit_characteristic_t *ch, homekit_value_t value, void *context)
-{
-    save_characteristic_to_flash(ch, value);
-
-    process_setting_update();
-}
-
-homekit_characteristic_t current_temperature = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE, 0);
-homekit_characteristic_t target_temperature = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE, 20, .callback = HOMEKIT_CHARACTERISTIC_CALLBACK(on_update));
-homekit_characteristic_t units = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY_UNITS, 0);
-homekit_characteristic_t current_state = HOMEKIT_CHARACTERISTIC_(CURRENT_HEATING_COOLING_STATE, 0);
-homekit_characteristic_t target_state = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE, 1, .callback = HOMEKIT_CHARACTERISTIC_CALLBACK(on_update));
-homekit_characteristic_t cooling_threshold = HOMEKIT_CHARACTERISTIC_(COOLING_THRESHOLD_TEMPERATURE, 25, .callback = HOMEKIT_CHARACTERISTIC_CALLBACK(on_update));
-homekit_characteristic_t heating_threshold = HOMEKIT_CHARACTERISTIC_(HEATING_THRESHOLD_TEMPERATURE, 15, .callback = HOMEKIT_CHARACTERISTIC_CALLBACK(on_update));
-homekit_characteristic_t current_humidity = HOMEKIT_CHARACTERISTIC_(CURRENT_RELATIVE_HUMIDITY, 0);
-
-homekit_characteristic_t reboot_device = HOMEKIT_CHARACTERISTIC_(CUSTOM_REBOOT_DEVICE, false, .id=103, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(ota_firmware_callback));
-homekit_characteristic_t ota_firmware = HOMEKIT_CHARACTERISTIC_(CUSTOM_OTA_UPDATE, false, .id=110, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(ota_firmware_callback));
-homekit_characteristic_t wifi_reset = HOMEKIT_CHARACTERISTIC_(CUSTOM_WIFI_RESET, false, .id=131, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(ota_firmware_callback));
 
 
-void device_restart_task() {
-    vTaskDelay(3000 / portTICK_PERIOD_MS);
-	for(int i = 0; i< 3;i++){
-		for(int i = 0; i< 3;i++){
-			led_write(true);
-  		    vTaskDelay(100 / portTICK_PERIOD_MS);
-   			led_write(false);
-   			vTaskDelay(100 / portTICK_PERIOD_MS);
-		}
-		vTaskDelay(250 / portTICK_PERIOD_MS);
-	}
-    led_write(false);
-	      
-   
-    if (reboot_device.value.bool_value) {
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+
+
+
+
+void save_characteristic_to_flash (homekit_characteristic_t *ch, homekit_value_t value);
+
+void load_characteristic_from_flash (homekit_characteristic_t *ch);
+
+void xSave_characteristic_TimerCallback(){
         
-         if (ota_firmware.value.bool_value) {
-        	 vTaskDelay(100 / portTICK_PERIOD_MS);
-    	     printf("OTA Update\n");
-       		 rboot_set_temp_rom(1);
-        
-  		 }
-  		 if (wifi_reset.value.bool_value) {
-           vTaskDelay(100 / portTICK_PERIOD_MS);
-           printf("WIFI Reset\n");
-           wifi_config_reset();
-        }
-        printf("Reboot\n");
-        sdk_system_restart();
-    }
-    
-    
-    
-    vTaskDelete(NULL);
+        save_characteristic_to_flash (&target_temperature, target_temperature.value);
+		save_characteristic_to_flash (&target_state, target_state.value);
+	
 }
 
-
-
-void ota_firmware_callback() {
-
-    if (reboot_device.value.bool_value) {
-         
-     xTaskCreate(device_restart_task, "device_restart_task", 256, NULL, 1, NULL);
-    }
-}
 
 
 void wifi_led(){
-	for(int i = 0; i< 3;i++){
+	for(int i = 0; i< 4;i++){
 		
 			led_write(true);
-  		    vTaskDelay(500 / portTICK_PERIOD_MS);
+  		    vTaskDelay(600 / portTICK_PERIOD_MS);
    			led_write(false);
-   			vTaskDelay(200 / portTICK_PERIOD_MS);
+   			vTaskDelay(150 / portTICK_PERIOD_MS);
 		
 		
 	}
-    led_write(false);
+    led_write(false); 
     
     vTaskDelete(NULL);
 }
@@ -284,18 +248,19 @@ void wifi_init_led()
 }
 
 void reset_configuration_task() {
-	for(int i = 0; i< 3;i++){
-		for(int i = 0; i< 3;i++){
+	for(int i = 0; i< 4;i++){
+		for(int i = 0; i< 4;i++){
 			led_write(true);
   		    vTaskDelay(150 / portTICK_PERIOD_MS);
    			led_write(false);
-   			vTaskDelay(150 / portTICK_PERIOD_MS);
+   			vTaskDelay(100 / portTICK_PERIOD_MS);
 		}
-		vTaskDelay(350 / portTICK_PERIOD_MS);
+		vTaskDelay(300 / portTICK_PERIOD_MS);
 	}
     led_write(false);
     
-
+	
+	vTaskDelay(500 / portTICK_PERIOD_MS);
    printf("Resetting Wifi Config\n");
 
    wifi_config_reset();
@@ -326,10 +291,8 @@ void reset_configuration()
  void ssd1306_task(void *pvParameters){
 
  if (ssd1306_load_xbm(&dev, homekit_logo, buffer));
-       // goto error_loop;
 
     if (ssd1306_load_frame_buffer(&dev, buffer));
-       // goto error_loop;
 
      
 	 vTaskDelay(SECOND * 3);
@@ -468,10 +431,10 @@ void screen_init(void)
       return;
     }
 
-    printf("SSD1306 lcd!!!!!!!!!!!!--------->>>>>>>>\n");
+    printf("SSD1306 lcd --------->>>>>>>> init\n");
     ssd1306_set_whole_display_lighting(&dev, false);
-    ssd1306_set_scan_direction_fwd(&dev, false);
-    ssd1306_set_segment_remapping_enabled(&dev, true);
+    ssd1306_set_scan_direction_fwd(&dev, true);
+    ssd1306_set_segment_remapping_enabled(&dev, false);
     is_display_init = true;
     
    xTaskCreate(ssd1306_task, "ssd1306_task", 384, NULL, 2, &Handle_screen);
@@ -548,8 +511,7 @@ void reset_button_callback(uint8_t gpio, button_event_t event) {
               uint8_t state = target_state.value.int_value + 1;
    
 
-        switch (state)
-        {
+        switch (state){
         case 1:
             //heat
             state = 1;
@@ -558,11 +520,11 @@ void reset_button_callback(uint8_t gpio, button_event_t event) {
         case 2:
             state = 2;
 
-            break;
+   */          break;
             //auto
-        case 3:
+        case 2:
             state = 3;
-  */          break;
+           break;
 
         default:
             //off
@@ -623,83 +585,70 @@ void process_setting_update(){
             relay_write(false);
         }
     }
-  if(is_display_init){
-//  printf("True\n");
-   vTaskResume(Handle_screen);
-  }
+ 	 if(is_display_init){
+ 	  vTaskResume(Handle_screen);
+	  }
   
 }    
 
 void temperature_sensor_task(){
 
-		
- bmp280_params_t  params;
-    float pressure, temperature, humidity;
 
-    bmp280_init_default_params(&params);
-
-    bmp280_t bmp280_dev;
-    bmp280_dev.i2c_dev.bus = i2c_bus;
-    bmp280_dev.i2c_dev.addr = BMP280_I2C_ADDRESS_1;
-	
-//	UBaseType_t uxHighWaterMark;
-//	uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
-//	printf("Temperature sensor stack >>>>> %d\n", uxHighWaterMark);
-	 float T = 0;
-    while (1) {
-        while (!bmp280_init(&bmp280_dev, &params)) {
-            printf("BMP280 initialization failed\n");
-            sensor_temp = true;
-            process_setting_update();
-            vTaskDelay(3000 / portTICK_PERIOD_MS);
-        }
-
-        bool bme280p = bmp280_dev.id == BME280_CHIP_ID;
-        printf("BMP280: found %s\n", bme280p ? "BME280" : "BMP280");
-
-        while(1) {
+    
+    float humidity_value, temperature_value;
         fire = gpio_read(RECIVE_GPIO) == 1;
-            vTaskDelay(5000 / portTICK_PERIOD_MS);
-        if (!bmp280_read_float(&bmp280_dev, &temperature, &pressure, &humidity)) {
-                printf("Temperature/pressure reading failed\n");
-                break;
-        }
-            printf("Temperature: %.2f C", temperature);
-            if (bme280p)
-                printf(", Humidity: %.2f\n", humidity);
-            else
-                printf("\n");
-                
-                int temps = (temperature *1000)/100;
-                temperature = temps;
-                
-                if(T != temperature){
-                printf(" %.2f -> %.2f C ", T, temperature);
-                T = temperature;
-            current_temperature.value = HOMEKIT_FLOAT(temperature/10);
-            current_humidity.value = HOMEKIT_FLOAT(humidity);
-
+        
+    if (dht_read_float_data(DHT_TYPE_DHT22, TEMPERATURE_SENSOR_PIN, &humidity_value, &temperature_value)) {
+    	if(T != temperature_value){
+    		T = temperature_value;
+            current_temperature.value = HOMEKIT_FLOAT(temperature_value);
             homekit_characteristic_notify(&current_temperature, current_temperature.value);
-            homekit_characteristic_notify(&current_humidity, current_humidity.value);
-            sensor_temp = false;
-            process_setting_update();
-            }
-      //      uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
-		//	printf("Temperature sensor stack %d\n", uxHighWaterMark);
             
+            current_humidity.value = HOMEKIT_FLOAT(humidity_value);
+            homekit_characteristic_notify(&current_humidity, current_humidity.value);
+                
+            process_setting_update();
+           }
+           printf("Temperature: %.2f C", temperature_value);
+           printf(", Humidity: %.2f\n", humidity_value);
+           count_error = 0;
+           sensor_temp = false;
+    } else {
+    
+   		count_error++;
+   		
+   		if(count_error >= 5){
+        printf(">>> Sensor: ERROR\n");
+        sensor_temp = true;
+        count_error = 0;
+        
+     	   if (current_state.value.int_value != 0) {
+        	    current_state.value = HOMEKIT_UINT8(0);
+            	homekit_characteristic_notify(&current_state, current_state.value);
+            
+           	 relay_write(false);
+        	}
         }
+        
+       
     }
 
-
+	/*	UBaseType_t uxHighWaterMark;
+		uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
+		printf("Temperature sensor stack >>>>> %d\n", uxHighWaterMark); */
    
 }
 
 void thermostat_init()
 {
+
   gpio_enable(BUTTON_UP_GPIO, GPIO_INPUT);
     gpio_enable(BUTTON_DOWN_GPIO, GPIO_INPUT);
     gpio_enable(BUTTON_RESET, GPIO_INPUT);
     gpio_enable(LED_GPIO, GPIO_OUTPUT);
+    gpio_enable(RECIVE_GPIO, GPIO_INPUT);
+	gpio_enable(TEMPERATURE_SENSOR_PIN, GPIO_INPUT);
+	
     if (button_create(BUTTON_UP_GPIO, 0, 600, button_up_callback)) {
         printf("Failed to initialize button Up\n");
     }
@@ -712,48 +661,48 @@ void thermostat_init()
         printf("Failed to initialize button\n");
     }
 
-
-  i2c_init(i2c_bus, scl_pin, sda_pin, I2C_FREQ_400K);
-  xTaskCreate(temperature_sensor_task, "Temp_Sensor", 384, NULL, 2, &xHandle);
+	gpio_set_pullup(TEMPERATURE_SENSOR_PIN, false, false);
+ 
+    xTemperatureTimer = xTimerCreate("Temperature Timer",(5000/portTICK_PERIOD_MS),pdTRUE,0, temperature_sensor_task);
+    xTimerStart(xTemperatureTimer, 3000 );
+    
+    xSave_characteristic_Timer = xTimerCreate("Save characteristic Timer",(5000/portTICK_PERIOD_MS),pdFALSE,0, xSave_characteristic_TimerCallback);
+   // xTimerStart( xSave_characteristic_Timer, 0 );
 
 }
 
 
 
+
 homekit_accessory_t *accessories[] = {
-    HOMEKIT_ACCESSORY(.id = 1, .category = homekit_accessory_category_thermostat, 
-    .services = (homekit_service_t *[]){HOMEKIT_SERVICE(ACCESSORY_INFORMATION,
-     .characteristics = (homekit_characteristic_t *[]){
-     &name,
-      &manufacturer,
-       &serial,
-        &model,
-        &revision,
-         HOMEKIT_CHARACTERISTIC(IDENTIFY, thermostat_identify), 
-         NULL
-         }), 
-         HOMEKIT_SERVICE(THERMOSTAT, .primary = true, .characteristics = (homekit_characteristic_t *[])
-         {HOMEKIT_CHARACTERISTIC(NAME, "Thermostat"),
-        &current_temperature,
-        &target_temperature,
-        &current_state,
-        &target_state,
-        &cooling_threshold,
-        &heating_threshold,
-        &units, 
-        &current_humidity,
-        &ota_firmware, 
-        &reboot_device,
-        &wifi_reset,
-            	
-       NULL
-     }),
-   NULL
-}),
-NULL
+    HOMEKIT_ACCESSORY(.id=1, .category=homekit_accessory_category_thermostat, .services=(homekit_service_t*[]) {
+        HOMEKIT_SERVICE(ACCESSORY_INFORMATION, .characteristics=(homekit_characteristic_t*[]) {
+            &name,
+            &manufacturer,
+            &serial,
+            &model,
+            &revision,
+            HOMEKIT_CHARACTERISTIC(IDENTIFY, thermostat_identify),
+            NULL
+        }),
+        HOMEKIT_SERVICE(THERMOSTAT, .primary=true, .characteristics=(homekit_characteristic_t*[]) {
+            HOMEKIT_CHARACTERISTIC(NAME, "Thermostat"),
+            &current_temperature,
+            &target_temperature,
+            &current_state,
+            &target_state,
+            &cooling_threshold,
+            &heating_threshold,
+            &units,
+            &current_humidity,
+            &ota_trigger,
+           
+            NULL
+        }),
+        NULL
+    }),
+    NULL
 };
-
-
 
 
 homekit_server_config_t config = {
@@ -761,34 +710,42 @@ homekit_server_config_t config = {
     .password = "111-11-111"
     };
 
+
 void on_wifi_ready()
 {
 	wifi_init_led();
-	
+
+	homekit_server_init(&config);
 	
 }
 void load_settings_from_flash (){
     
-   // printf("load_settings_from_flash - load setting from flash\n");
-    load_characteristic_from_flash (&target_state);
-    load_characteristic_from_flash (&target_temperature);
+    load_characteristic_from_flash(&target_state);
+    load_characteristic_from_flash(&target_temperature);
+  
 }
 
 void create_accessory_name() {
-   /*
-	 uint8_t macaddr[6];
-    sdk_wifi_get_macaddr(STATION_IF, macaddr);
-    int name_len = snprintf(NULL, 0, "Thermostat-%02X%02X%02X", macaddr[1], macaddr[2], macaddr[3]);
-    char *name_value = malloc(name_len + 1);
-    snprintf(name_value, name_len + 1, "Thermostat-%02X%02X%02X", macaddr[1], macaddr[2], macaddr[3]);
-    name.value = HOMEKIT_STRING(name_value);
-   // serial.value = HOMEKIT_STRING(name_value);
    
-   */
+	
+  uint8_t macaddr[6];
+    sdk_wifi_get_macaddr(STATION_IF, macaddr);
+    
+    int name_len = snprintf(NULL, 0, "Thermostat-%02X%02X%02X",macaddr[3], macaddr[4], macaddr[5]);
+    char *name_value = malloc(name_len+1);
+    snprintf(name_value, name_len+1, "Thermostat-%02X%02X%02X",macaddr[3], macaddr[4], macaddr[5]);
+    name.value = HOMEKIT_STRING(name_value);
+     
+    int serial_len = snprintf(NULL, 0, "%02X:%02X:%02X:%02X:%02X",macaddr[1],macaddr[2],macaddr[3], macaddr[4], macaddr[5]);
+    char *serial_value = malloc(serial_len+1);
+    snprintf(serial_value, serial_len+1, "%02X:%02X:%02X:%02X:%02X",macaddr[1],macaddr[2],macaddr[3], macaddr[4], macaddr[5]);
+    serial.value = HOMEKIT_STRING(serial_value);
    
    
 }
+
    
+
 
 void user_init(void){
     uart_set_baud(0, 115200);
@@ -797,15 +754,9 @@ void user_init(void){
     screen_init();
     thermostat_init(); 
     wifi_config_init("HomeKit-Thermostat", NULL, on_wifi_ready);
+        
     
-
-    int c_hash=ota_read_sysparam(&manufacturer.value.string_value,&serial.value.string_value,
-                                      &model.value.string_value,&revision.value.string_value);
-    config.accessories[0]->config_number=c_hash; 
-    
-    homekit_server_init(&config);
    
-
     
 //-------    
 }
