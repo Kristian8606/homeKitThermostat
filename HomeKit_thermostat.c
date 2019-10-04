@@ -60,8 +60,8 @@
 #define BUTTON_DOWN_GPIO 13 //D7
 #define BUTTON_RESET 0 //D3
 #define RELAY_GPIO 2 //D4
-#define RECIVE_GPIO 15 //D8
-const int LED_GPIO = 16; //D0
+#define  RECIVE_GPIO 16 //D0
+const int LED_GPIO = 15; //D8
 
 //Timer
 TimerHandle_t xSave_characteristic_Timer = NULL;
@@ -588,7 +588,6 @@ void process_setting_update(){
  	 if(is_display_init){
  	  vTaskResume(Handle_screen);
 	  }
-  
 }    
 
 void temperature_sensor_task(){
@@ -596,7 +595,7 @@ void temperature_sensor_task(){
 
     
     float humidity_value, temperature_value;
-        fire = gpio_read(RECIVE_GPIO) == 1;
+       fire = gpio_read(RECIVE_GPIO) == 1;
         
     if (dht_read_float_data(DHT_TYPE_DHT22, TEMPERATURE_SENSOR_PIN, &humidity_value, &temperature_value)) {
     	if(T != temperature_value){
@@ -642,10 +641,11 @@ void temperature_sensor_task(){
 void thermostat_init()
 {
 
-  gpio_enable(BUTTON_UP_GPIO, GPIO_INPUT);
+    gpio_enable(BUTTON_UP_GPIO, GPIO_INPUT);
     gpio_enable(BUTTON_DOWN_GPIO, GPIO_INPUT);
     gpio_enable(BUTTON_RESET, GPIO_INPUT);
     gpio_enable(LED_GPIO, GPIO_OUTPUT);
+    gpio_enable(RELAY_GPIO, GPIO_OUTPUT);
     gpio_enable(RECIVE_GPIO, GPIO_INPUT);
 	gpio_enable(TEMPERATURE_SENSOR_PIN, GPIO_INPUT);
 	
