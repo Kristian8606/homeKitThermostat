@@ -24,7 +24,7 @@
 #define DEVICE_NAME "HomeKit-thermostat"
 #define DEVICE_MODEL "SSD1306 & DHT22"
 #define DEVICE_SERIAL "12345678"
-#define FW_VERSION "0.4.2"
+#define FW_VERSION "0.4.4"
 
 #include <stdio.h>
 #include <espressif/esp_wifi.h>
@@ -43,7 +43,7 @@
 #include <dht/dht.h>
 //#include <sysparam.h>
 #include "HomeKit_thermostat.h"
-#include "button.h"
+//#include "button.h"
 //#include "bmp280/bmp280.h"
 //#include <rboot-api.h>
 #include <i2c/i2c.h>
@@ -62,6 +62,8 @@
 #define RELAY_GPIO 2 //D4
 #define  RECIVE_GPIO 16 //D0
 const int LED_GPIO = 15; //D8
+uint32_t last_event_time;
+uint16_t debounce_time = 60;
 
 //Timer
 TimerHandle_t xSave_characteristic_Timer = NULL;
@@ -391,7 +393,7 @@ void reset_configuration()
             printf("Error printing mode\n");
         }
        
-
+			// printf("%d\n", fire);
         if (fire){
          ssd1306_load_xbm(&dev, thermostat_xbm, buffer);
         }
@@ -445,104 +447,8 @@ void screen_init(void)
 
 
 
-//Button
 
 
-void button_up_callback(uint8_t gpio, button_event_t event) {
-    switch (event) {
-        case button_event_single_press:
-            printf("Button UP\n");
-	    if ((target_temperature.value.float_value + 0.5) <= 38)
-        {
-            target_temperature.value.float_value += 0.5;
-            homekit_characteristic_notify(&target_temperature, target_temperature.value);
-           // save_characteristic_to_flash (&target_temperature, target_temperature.value);
-        }
-            
-            
-            break;
-        case button_event_long_press:
-            printf("Button UP\n");
-            if ((target_temperature.value.float_value + 1) <= 38)
-        {
-            target_temperature.value.float_value += 1;
-            homekit_characteristic_notify(&target_temperature, target_temperature.value);
-          //  save_characteristic_to_flash (&target_temperature, target_temperature.value);
-        }
-            break;
-        default:
-            printf("Unknown button event: %d\n", event);
-    }
-}
-
-
-void button_down_callback(uint8_t gpio, button_event_t event) {
-    switch (event) {
-        case button_event_single_press:
-            printf("Button DOWN\n");
-           	if ((target_temperature.value.float_value - 0.5) >= 10)
-        {
-            target_temperature.value.float_value -= 0.5;
-            homekit_characteristic_notify(&target_temperature, target_temperature.value);
-          //  save_characteristic_to_flash (&target_temperature, target_temperature.value);
-        }
-            break;
-        case button_event_long_press:
-            printf("Button DOWN\n");
-             if ((target_temperature.value.float_value - 1) >= 10)
-        {
-            target_temperature.value.float_value -= 1;
-            homekit_characteristic_notify(&target_temperature, target_temperature.value);
-           // save_characteristic_to_flash (&target_temperature, target_temperature.value);
-        }
-            break;
-        default:
-            printf("Unknown button event: %d\n", event);
-    }
-}
-
-
-
-
-void reset_button_callback(uint8_t gpio, button_event_t event) {
-    switch (event) {
-        case button_event_single_press:
-            printf("Button event: %d, doing nothin\n", event);
-              uint8_t state = target_state.value.int_value + 1;
-   
-
-        switch (state){
-        case 1:
-            //heat
-            state = 1;
-            break;
- /*           //cool
-        case 2:
-            state = 2;
-
-   */          break;
-            //auto
-        case 2:
-            state = 3;
-           break;
-
-        default:
-            //off
-
-            state = 0;
-            break;
-        }
-        target_state.value = HOMEKIT_UINT8(state);
-        homekit_characteristic_notify(&target_state, target_state.value);
-            break;
-        case button_event_long_press:
-            printf("Button event: %d, resetting homekit config\n", event);
-            reset_configuration();
-            break;
-        default:
-            printf("Unknown button event: %d\n", event);
-    }
-}
 
 
 void process_setting_update(){
@@ -595,7 +501,10 @@ void temperature_sensor_task(){
 
     
     float humidity_value, temperature_value;
+
        fire = gpio_read(RECIVE_GPIO) == 1;
+             //  printf("%d\n", fire);
+
         
     if (dht_read_float_data(DHT_TYPE_DHT22, TEMPERATURE_SENSOR_PIN, &humidity_value, &temperature_value)) {
     	if(T != temperature_value){
@@ -637,6 +546,67 @@ void temperature_sensor_task(){
 		printf("Temperature sensor stack >>>>> %d\n", uxHighWaterMark); */
    
 }
+void button_intr_callback_button(uint8_t gpio){
+	
+	uint32_t now = xTaskGetTickCountFromISR();
+    if ((now - last_event_time) < debounce_time) {
+        // debounce time, ignore events
+        printf("no run -> %d\n", (now - last_event_time));
+        return;
+    }
+    last_event_time = now;
+
+    
+	 printf("now -> %d\n",now);
+        	 printf("Button -> %d\n", gpio_read(BUTTON_RESET));
+        	 
+        if (gpio_read(BUTTON_UP_GPIO) == 0 && (target_temperature.value.float_value + 0.5) <= 38)
+        {
+            target_temperature.value.float_value += 0.5;
+            homekit_characteristic_notify(&target_temperature, target_temperature.value);
+           // save_characteristic_to_flash (&target_temperature, target_temperature.value);
+        }
+        	 
+        if (gpio_read(BUTTON_DOWN_GPIO) == 0 && (target_temperature.value.float_value - 0.5) >= 10){
+            target_temperature.value.float_value -= 0.5;
+            homekit_characteristic_notify(&target_temperature, target_temperature.value);
+          //  save_characteristic_to_flash (&target_temperature, target_temperature.value);
+        }
+        
+       if (gpio_read(BUTTON_RESET) == 0) {
+        
+              uint8_t state = target_state.value.int_value + 1;
+   		switch (state){
+        case 1:
+            //heat
+            state = 1;
+            break;
+ /*           //cool
+        case 2:
+            state = 2;
+
+   */          break;
+            //auto
+        case 2:
+            state = 3;
+           break;
+
+        default:
+            //off
+
+            state = 0;
+            break;
+        }
+        target_state.value = HOMEKIT_UINT8(state);
+        homekit_characteristic_notify(&target_state, target_state.value);
+        
+		}
+		
+		if(gpio_read(BUTTON_UP_GPIO) == 0 && gpio_read(BUTTON_DOWN_GPIO) == 0 && gpio_read(BUTTON_RESET) == 0){
+			 reset_configuration();
+		}
+        
+}
 
 void thermostat_init()
 {
@@ -649,21 +619,25 @@ void thermostat_init()
     gpio_enable(RECIVE_GPIO, GPIO_INPUT);
 	gpio_enable(TEMPERATURE_SENSOR_PIN, GPIO_INPUT);
 	
-    if (button_create(BUTTON_UP_GPIO, 0, 600, button_up_callback)) {
+	/*
+    if (button_create(BUTTON_UP_GPIO, 0, 500, button_up_callback)) {
         printf("Failed to initialize button Up\n");
     }
 
-   if (button_create(BUTTON_DOWN_GPIO, 0, 600, button_down_callback)) {
+   if (button_create(BUTTON_DOWN_GPIO, 0, 500, button_down_callback)) {
         printf("Failed to initialize button down\n");
     }
 
     if (button_create(BUTTON_RESET, 0, 10000, reset_button_callback)) {
         printf("Failed to initialize button\n");
     }
+    */
+    
+   
 
 	gpio_set_pullup(TEMPERATURE_SENSOR_PIN, false, false);
  
-    xTemperatureTimer = xTimerCreate("Temperature Timer",(5000/portTICK_PERIOD_MS),pdTRUE,0, temperature_sensor_task);
+    xTemperatureTimer = xTimerCreate("Temperature Timer",(10000/portTICK_PERIOD_MS),pdTRUE,0, temperature_sensor_task);
     xTimerStart(xTemperatureTimer, 3000 );
     
     xSave_characteristic_Timer = xTimerCreate("Save characteristic Timer",(5000/portTICK_PERIOD_MS),pdFALSE,0, xSave_characteristic_TimerCallback);
@@ -671,7 +645,17 @@ void thermostat_init()
 
 }
 
+void button_init(){
 
+    gpio_set_pullup(BUTTON_UP_GPIO, true, true);
+    gpio_set_interrupt(BUTTON_UP_GPIO, GPIO_INTTYPE_EDGE_NEG, button_intr_callback_button);
+    
+    gpio_set_pullup(BUTTON_DOWN_GPIO, true, true);
+    gpio_set_interrupt(BUTTON_DOWN_GPIO, GPIO_INTTYPE_EDGE_NEG, button_intr_callback_button);
+    
+    gpio_set_pullup(BUTTON_RESET, true, true);
+    gpio_set_interrupt(BUTTON_RESET, GPIO_INTTYPE_EDGE_NEG, button_intr_callback_button);
+}
 
 
 homekit_accessory_t *accessories[] = {
@@ -754,6 +738,7 @@ void user_init(void){
     screen_init();
     thermostat_init(); 
     wifi_config_init("HomeKit-Thermostat", NULL, on_wifi_ready);
+    button_init();
         
     
    

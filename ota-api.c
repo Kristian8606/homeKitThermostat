@@ -1,16 +1,24 @@
-#include <stdlib.h>  
+#include <stdlib.h>  //for printf
 #include <stdio.h>
 #include <string.h>
+//#include "ota-api.h"
 #include <homekit/homekit.h>
 #include <homekit/characteristics.h>
 #include <espressif/esp_wifi.h>
 #include <espressif/esp_sta.h>
-//#include <rboot-api.h>
+#include <rboot-api.h>
 #include <sysparam.h>
-#include "ota-api.h"
 
- // this function is optional to couple Homekit parameters to the sysparam variables and github parameters
+// the first function is the ONLY thing needed for a repo to support ota after having started with ota-boot
+// in ota-boot the user gets to set the wifi and the repository details and it then installs the ota-main binary
 
+void ota_update(void *arg) {  //arg not used
+    rboot_set_temp_rom(1); //select the OTA main routine
+    sdk_system_restart();  //#include <rboot-api.h>
+    // there is a bug in the esp SDK such that if you do not power cycle the chip after serial flashing, restart is unreliable
+}
+/*
+// this function is optional to couple Homekit parameters to the sysparam variables and github parameters
 unsigned int  ota_read_sysparam(char **manufacturer,char **serial,char **model,char **revision) {
     sysparam_status_t status;
     char *value;
@@ -46,8 +54,7 @@ unsigned int  ota_read_sysparam(char **manufacturer,char **serial,char **model,c
     printf("manuf=\'%s\' serial=\'%s\' model=\'%s\' revision=\'%s\' c#=%d\n",*manufacturer,*serial,*model,*revision,c_hash);
     return c_hash;
 }
-
-
+*/
 void save_characteristic_to_flash(homekit_characteristic_t *ch, homekit_value_t value){
     
     sysparam_status_t status = SYSPARAM_OK;
@@ -182,3 +189,21 @@ void load_characteristic_from_flash (homekit_characteristic_t *ch){
 }
 
 
+#include <homekit/characteristics.h>
+
+#include <esplibs/libmain.h>
+#include <etstimer.h>
+
+static ETSTimer update_timer;
+
+void ota_set(homekit_value_t value) {
+    if (value.format != homekit_format_bool) {
+        printf("Invalid ota-value format: %d\n", value.format);
+        return;
+    }
+    if (value.bool_value) {
+        //make a distinct light pattern or other feedback to the user = call identify routine
+        sdk_os_timer_setfn(&update_timer, ota_update, NULL);
+        sdk_os_timer_arm(&update_timer, 500, 0); //wait 0.5 seconds to trigger the reboot so gui can update and events sent
+    }
+}

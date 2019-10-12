@@ -66,7 +66,7 @@ int button_create(const uint8_t gpio_num, bool pressed_value, uint16_t long_pres
     button->pressed_value = pressed_value;
 
     // times in milliseconds
-    button->debounce_time = 50;
+    button->debounce_time = 60;
     button->long_press_time = long_press_time;
 
     uint32_t now = xTaskGetTickCountFromISR();
