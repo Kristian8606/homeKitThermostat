@@ -24,7 +24,7 @@
 #define DEVICE_NAME "HomeKit-thermostat"
 #define DEVICE_MODEL "SSD1306 & DHT22"
 #define DEVICE_SERIAL "12345678"
-#define FW_VERSION "0.4.4"
+#define FW_VERSION "0.4.5"
 
 #include <stdio.h>
 #include <espressif/esp_wifi.h>
@@ -558,7 +558,7 @@ void button_intr_callback_button(uint8_t gpio){
 
     
 	 printf("now -> %d\n",now);
-        	 printf("Button -> %d\n", gpio_read(BUTTON_RESET));
+        //	 printf("Button -> %d\n", gpio_read(BUTTON_RESET));
         	 
         if (gpio_read(BUTTON_UP_GPIO) == 0 && (target_temperature.value.float_value + 0.5) <= 38)
         {
@@ -647,13 +647,13 @@ void thermostat_init()
 
 void button_init(){
 
-    gpio_set_pullup(BUTTON_UP_GPIO, true, true);
+   // gpio_set_pullup(BUTTON_UP_GPIO, true, true);
     gpio_set_interrupt(BUTTON_UP_GPIO, GPIO_INTTYPE_EDGE_NEG, button_intr_callback_button);
     
-    gpio_set_pullup(BUTTON_DOWN_GPIO, true, true);
+   // gpio_set_pullup(BUTTON_DOWN_GPIO, true, true);
     gpio_set_interrupt(BUTTON_DOWN_GPIO, GPIO_INTTYPE_EDGE_NEG, button_intr_callback_button);
     
-    gpio_set_pullup(BUTTON_RESET, true, true);
+  //  gpio_set_pullup(BUTTON_RESET, true, true);
     gpio_set_interrupt(BUTTON_RESET, GPIO_INTTYPE_EDGE_NEG, button_intr_callback_button);
 }
 
